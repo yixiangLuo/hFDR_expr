@@ -47,3 +47,11 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+figs/temp/*
+!figs/.gitignore
+data/temp/*
+!data/.gitignore
+!data/temp/.gitignore
+log/*
+!log/.gitignore
