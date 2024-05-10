@@ -108,101 +108,9 @@ gene_X <- function(X_type = "IID_Normal", n, p, X_seed = NA,
   return(list(X = X, Xcov.true = cov_mat, beta_cov = beta_cov))
 }
 
-rt.mult <- function(n, p, df, cov_mat){
-  R <- chol(cov_mat)
-  basis <- matrix(rnorm(n*p), n)
-  X <- basis %*% R
-  X <- sqrt(df / rchisq(n, df)) * X
-  return(X)
-}
-
-glasso.invSigma <- function(p, nonnulls){
-  sparsity <- nonnulls / (p*(p-1)/2)
-  invSigma <- diag(1, nrow = p, ncol = p)
-  lower_tri <- lower.tri(invSigma)
-  invSigma[lower_tri] <- 0.9 * rbinom(sum(lower_tri), 1, sparsity)
-  invSigma <- (t(invSigma) + invSigma) / 2
-  diag(invSigma) <- pmax(diag(invSigma), 1.1 * (rowSums(invSigma) - diag(invSigma)))
-  
-  return(invSigma)
-}
-
 scale_X <- function(X, center = F){
   X <- scale(X, center = center, scale = F)
   X <- scale(X, center = F, scale = sqrt(colSums(X^2) / (NROW(X)-1)))
-}
-
-beta_to_sparse <- function(beta, beta.sample, Sigma, sigma, mah.tol = 0.1, m1){
-  p <- length(beta)
-  mah.target <- p
-
-  noise.sample <- c(beta.sample) - beta
-  mah.sample <- c(t(noise.sample) %*% Sigma %*% noise.sample / sigma^2)
-  # print(mah.sample)
-  
-  for(try_i in 1:100){
-    noise.sample <- noise.sample * sqrt(mah.target / mah.sample)
-    beta.sample <- beta + noise.sample
-    
-    threshold <- sort(abs(beta.sample), partial = p-(m1-1))[p-(m1-1)]
-    beta.sample[abs(beta.sample) < threshold] <- 0
-    
-    noise.sample <- beta.sample - beta
-    mah.sample <- c(t(noise.sample) %*% Sigma %*% noise.sample / sigma^2)
-    # print(mah.sample)
-    
-    if(abs(mah.sample - mah.target) / mah.target <= mah.tol) break
-    if(try_i == 100) warning("not convergent")
-  }
-
-  return(list(beta.sample = beta.sample, mah.sample = mah.sample))
-}
-
-sample_beta <- function(beta, Sigma, Sigma.inv.sqrt, sigma,
-                        quantile_num = 9, sample_size = 100){
-  if(sample_size < quantile_num+1) stop()
-  
-  p <- NCOL(Sigma)
-  sample_trials <- 5000
-  
-  noise.sample <- Sigma.inv.sqrt %*% matrix(rnorm(sample_trials * p, sd = sigma), p, sample_trials)
-  mahalanobis.sample <- sapply(1:sample_trials, function(sample_i){
-    t(noise.sample[, sample_i]) %*% Sigma %*% noise.sample[, sample_i] / sigma^2
-  })
-  mahalanobis.quantiles <- unname(quantile(mahalanobis.sample, (1:quantile_num)/(quantile_num+1)))
-  
-  quantile_size <- abs(diff(c(0, mahalanobis.quantiles)))
-  quantile_size <- quantile_size^(log(3, base = max(quantile_size)/min(quantile_size)))
-  quantile_size <- ceiling(quantile_size / sum(quantile_size) * sample_size)
-  sample_exceed <- sum(quantile_size) - (sample_size - 1)
-  quantile_index <- quantile_num
-  while(sample_exceed > 0){
-    if(quantile_size[quantile_index] > 1){
-      quantile_size[quantile_index] <- quantile_size[quantile_index] - 1
-      sample_exceed <- sample_exceed - 1
-    }
-    quantile_index <- quantile_index - 1
-    if(quantile_index == 0) quantile_index <- quantile_num
-  }
-  
-  sample_indeces <- c()
-  mahalanobis.quantiles <- c(0, mahalanobis.quantiles)
-  for(quantile_index in 1:quantile_num){
-    candidates <- which(mahalanobis.sample > mahalanobis.quantiles[quantile_index] &
-                          mahalanobis.sample <= mahalanobis.quantiles[quantile_index+1])
-    sample_selected <- sample(candidates, quantile_size[quantile_index],
-                              replace = quantile_size[quantile_index] > length(candidates))
-    sample_indeces <- c(sample_indeces, sample_selected)
-  }
-  
-  beta.samples <- beta + cbind(rep(0, p), noise.sample[, sample_indeces])
-  mah_dis.cdf <- c(0, sapply(mahalanobis.sample[sample_indeces], function(mah_dis){
-    sum(mahalanobis.sample <= mah_dis) / sample_trials
-  }))
-  
-  return(list(beta = beta.samples, mah_dis.cdf = mah_dis.cdf,
-              mah_dis = mahalanobis.sample[sample_indeces], 
-              mah.quantiles = mahalanobis.quantiles))
 }
 
 
@@ -227,129 +135,6 @@ makeup_vectors <- function(...){
   
   invisible()
 }
-
-# naively sampling y conditional on Sj
-y_condj_sample <- function(y, X, j, sample_size, data.pack = NULL){
-  
-  n <- NROW(X)
-  
-  if(is.null(data.pack)){
-    projj_y <- lm(formula = y ~ X[, -j] + 0)$fitted.values
-  } else{
-    proj_y <- matrix(y, nrow = 1) %*% data.pack$Q_X
-    proj_y <- c(data.pack$Q_X %*% matrix(proj_y, ncol = 1))
-    projj_y <- proj_y - data.pack$vjy_obs[j] * data.pack$vj_mat[, j]
-  }
-  
-  radius <- sqrt(sum(y^2) - sum(projj_y^2))
-  
-  y_sample <- matrix(rnorm(n * sample_size), nrow = n)
-  
-  if(is.null(data.pack)){
-    y_sample_projj <-lm(formula = y_sample ~ X[, -j] + 0)$fitted.values
-  } else{
-    y_sample_proj <- data.pack$Q_X %*% (t(data.pack$Q_X) %*% y_sample)
-    y_sample_projj <- y_sample_proj - data.pack$vj_mat[, j] %*% (t(data.pack$vj_mat[, j]) %*% y_sample)
-  }
-  y_sample <- y_sample - y_sample_projj
-  y_sample <- scale(y_sample, center = FALSE, scale = sqrt(colSums(y_sample^2)) / radius)
-  y_sample <- projj_y + y_sample
-  
-  if(!is.null(data.pack)){
-    Xjy.sample <- t(X[, j]) %*% y_sample
-    in_range <- (Xjy.sample >= min(data.pack$Xy_bound[, j])) & (Xjy.sample <= max(data.pack$Xy_bound[, j]))
-    if(sum(in_range) < sample_size){
-      bootstrap_samples <- sample(which(in_range), sum(!in_range))
-      y_sample[, !in_range] <- y_sample[, bootstrap_samples]
-    }
-  }
-  
-  return(y_sample)
-}
-
-y_from_beta <- function(X, X_proj, beta, sigma){
-  n <- NROW(X)
-  
-  proj_y <- X %*% beta
-  
-  y <- rnorm(n, sd = sigma)
-  y <- proj_y + y - X_proj %*% y
-  
-  return(y)
-}
-
-dir_trunc <- function(x, direction){
-  if(length(x) == 0) return(NULL)
-  
-  # x <- sapply(x, function(e){
-  #   if(direction * e > 0){e} else{direction * Inf}
-  # })
-  for(i in 1:length(x)){
-    if(direction * x[i] <= 0){
-      x[i] <- direction * Inf
-    }
-  }
-  return(x)
-}
-
-solve_mat22 <- function(mat){
-  a <- mat[1, 1]
-  b <- mat[1, 2]
-  c <- mat[2, 1]
-  d <- mat[2, 2]
-  det <- a*d-b*c
-  inv <- matrix(c(d, -c, -b, a), ncol = 2) / det
-  return(inv)
-}
-
-# gene_lambda_seq <- function(Sigma, beta, nlambda, sigma, n, scaling = T){
-#   p <- NCOL(Sigma)
-# 
-#   lambda_max <- max(abs(Sigma %*% beta)) / n * ifelse(scaling, 1, 1.5*n)
-#   lambda_min <- min(lambda_max * 0.9, 1 * sigma / n * ifelse(scaling, 1, 1.5*sqrt(n)))
-#   k <- (0:(nlambda-1)) / nlambda
-#   lambda_seq <- lambda_max * (lambda_min/lambda_max)^k
-#   
-#   return(lambda_seq)
-# }
-# 
-# gene_glasso_rho_seq <- function(Sigma, n, ntune = 10, lower.tail = 0.95){
-#   rho_max <- max(abs((Sigma)[upper.tri(Sigma)])) * n / 4
-#   
-#   X.null <- gene_X(X_type = "Inv_Sparse", n, p = NCOL(Sigma), 1,
-#                    scaling = F, model_X = T, signal = 0, nonnulls = 0)$X
-#   Sigma.null <- t(X.null) %*% X.null
-#   rho_min <- unname(quantile(abs((Sigma.null)[upper.tri(Sigma.null)]), lower.tail))
-#   
-#   tune_seq <- exp(seq(log(rho_max), log(rho_min), length.out = ntune)) / n
-#   
-#   return(tune_seq)
-# }
-# 
-# gene_FS_tune_seq <- function(X_type, n, p, scaling_X, model_X,
-#                              pi1, mu1, posit_type, ntune){
-#   FDR <- sapply(1:10, function(seed){
-#     X <- gene_X(X_type, n, p, seed, scaling_X, model_X)$X
-#     beta <- genmu(p, pi1, mu1, posit_type, 1)
-#     H0 <- beta == 0
-#     y <- X %*% beta + rnorm(n)
-#     FS.select <- select_variables(X, y, tune_seq = 1:min(round(5*p*pi1), p, n), "FS")
-#     FDP <- calc_sel_FDP(FS.select, H0)
-#     return(FDP)
-#   })
-#   FDR <- rowMeans(FDR)
-#   
-#   start <- max(1, min(which(FDR > 0.01)))
-#   end <- which.min(abs(FDR - 0.75))
-#   end <- max(end, round(p * 0.4))
-#   distance <- end - start
-#   if(distance + 1 <= ntune){
-#     tune_seq <- (start + min(0, p - (start + ntune - 1))) : min(p, start + ntune - 1)
-#   } else{
-#     tune_seq <- (start:end)[round(seq(1, distance + 1, length.out = ntune))]
-#   }
-#   return(tune_seq)
-# }
 
 
 gene_tune_seq <- function(set, sel_method, mu1, FDR_range, n_tune, mc_size = 50){
@@ -379,7 +164,7 @@ gene_tune_seq <- function(set, sel_method, mu1, FDR_range, n_tune, mc_size = 50)
       # k <- (0:(n_lambda-1)) / n_lambda
       # tune_candidates <- lambda_max * (lambda_min/lambda_max)^k
       tune_candidates <- glmnet::glmnet(X, y, intercept = T, standardize = T, family = "gaussian")$lambda
-    } else if(sel_method == "FS"){
+    } else if(sel_method == "fs"){
       tune_candidates <- 1:min(round(p*set$pi1/(1-max(FDR_range))), p, n)
     } else if(sel_method == "logistic"){
       X <- gene_X(set$X_type, n, p, set$X_seed,
@@ -466,7 +251,7 @@ gene_tune_seq <- function(set, sel_method, mu1, FDR_range, n_tune, mc_size = 50)
   })
   
   
-  if(sel_method != "FS"){
+  if(sel_method != "fs"){
     tune_candidates <- log(tune_candidates)
   }
   # print(FDR)
@@ -486,7 +271,7 @@ gene_tune_seq <- function(set, sel_method, mu1, FDR_range, n_tune, mc_size = 50)
     return(endpoint)
   })
   
-  if(sel_method == "FS"){
+  if(sel_method == "fs"){
     # tune_seq <- round(seq(tune_range[1], min(tune_range[2], p), length.out = n_tune))
     lower_bound <- 10
     tune_seq <- round(exp(seq(log(max(lower_bound, tune_range[1])), log(min(tune_range[2], p)), length.out = n_tune)))
@@ -498,6 +283,22 @@ gene_tune_seq <- function(set, sel_method, mu1, FDR_range, n_tune, mc_size = 50)
   } else{
     tune_seq <- exp(seq(tune_range[1], tune_range[2], length.out = n_tune))
   }
+  return(tune_seq)
+}
+
+subset_lambda <- function(cv.obj, n_tune){
+  n_tune.cv <- length(cv.obj$lambda)
+  ind.min <- cv.obj$index[1]
+  ind.1se <- cv.obj$index[2]
+  dist <- ind.min - ind.1se
+  ind.end <- max(ind.min + 3*dist, (n_tune.cv + 0*ind.min) %/% 1)
+  ind.end <- min(ind.end, n_tune.cv)
+  ind.dense_end <- min(ind.min + max(dist, round(ind.min/3)), ind.end)
+  n_tune.dense <- round(ind.dense_end*2 / (ind.dense_end + ind.end) * n_tune)
+  tune.ind <- c(round(seq(from = 1, to = ind.dense_end, length.out = n_tune.dense)),
+                round(seq(from = ind.dense_end, to = ind.end, length.out = n_tune-n_tune.dense+1)))
+  tune.ind <- unique(tune.ind)
+  tune_seq <- cv.obj$lambda[tune.ind]
   return(tune_seq)
 }
 
@@ -574,7 +375,7 @@ select_calib <- function(set, X, nreps, alpha, target, parallel){
                                     FDR_range = c(alpha/2, min(1, alpha*2)),
                                     n_tune = 50, mc_size = 3)
           # selected <- as.matrix(glmnet::glmnet(X, y, lambda = tune_seq, intercept = F)$beta != 0)
-        } else if(set$calib_method == "FS"){
+        } else if(set$calib_method == "fs"){
           y <- X %*% beta + eps
           tune_seq <- 1:p
           # res <- summary(regsubsets(x = X, y = y, nvmax = p, method = "forward"))
@@ -806,102 +607,6 @@ genmu <- function(n, pi1, mu1,
 }
 
 
-robust_noise_calib <- function(set, X, mu1, alpha = 0.05, nreps = 50, n_cores = 1){
-  
-  if(!set$random_X){
-    n <- nrow(X)
-    p <- ncol(X)
-  } else{
-    n <- set$n
-    p <- set$p
-  }
-  
-  if(!set$random_X){
-    X_list <- list(X)
-    Sigma_list <- list(solve(t(X) %*% X))
-  } else{
-    sample_num <- 5
-    X_list <- lapply(1:sample_num, function(i){
-      gene_X(set$X_type, n, p, i,
-             scaling = set$scaling, model_X = set$model_X)$X
-    })
-    Sigma_list <- lapply(X_list, function(X){
-      solve(t(X) %*% X)
-    })
-  }
-  X_sample_num <- length(X_list)
-  
-  beta_list <- lapply(1:nreps, function(i){
-    with_seed(1, {
-      beta <- genmu(p, set$pi1, 1, set$posit_type, 1)
-    })
-    return(beta)
-  })
-  eps_list <- lapply(1:nreps, function(i){
-    with_seed(i, rnorm(n))
-  })
-  
-  parallel <- process_parallel(n_cores)
-  forall <- parallel$iterator
-  `%exec%` <- parallel$connector
-  
-  single_test_error <- function(mult){
-    null_pvals <- unlist(forall(i = 1:nreps, .options.multicore = list(preschedule = F)) %exec% {
-      H0 <- beta_list[[i]] == 0            
-      beta <- beta_list[[i]] * mu1
-      eps <- eps_list[[i]]
-      
-      X <- X_list[[(i%%X_sample_num)+1]]
-      Sigma <- Sigma_list[[(i%%X_sample_num)+1]]
-      
-      # sd_mult <- rgamma(n, shape = 1/var_of_var, scale = var_of_var)
-      # sd_mult <- runif(n, 1 - sqrt(12*var_of_var)/2, 1 + sqrt(12*var_of_var)/2)
-      y <- X %*% beta + eps * exp(mult * X %*% beta)
-      # y <- X %*% beta + rt(n, df = var_of_var)
-      
-      tvals <- lm_to_t(y, X, Sigma)
-      pvals <- pvals_t(tvals$tvals, tvals$df, side = "two")
-      
-      return(pvals[H0])
-    })
-    # mean(null_pvals < alpha) - 2 * alpha
-    null_pvals
-  }
-  
-  browser()
-  null_pvals <- single_test_error(1)
-  hist(null_pvals, breaks = seq(0, 1, by = 0.05))
-  
-  lower <- 0.01
-  upper <- 0.5
-  while (upper <= 10){
-    with_seed(1, {
-      tmp <- try(uniroot(single_test_error, c(lower, upper))$root)
-    })
-    if (class(tmp) == "try-error"){
-      upper <- upper * 2
-    } else {
-      return(tmp)
-    }
-  }
-  warning("desired singal strength not found. Using var_of_sd = 10")
-  return(10)
-}
-
-
-calc_lasso_FDP <- function(lasso.fit, H0){
-  FDPs <- sapply(1:length(lasso.fit$lambda), function(lambda_i){
-    selected <- which(abs(lasso.fit$beta[, lambda_i]) > 0)
-    nsel <- length(selected)
-    false_discovery <- length(intersect(selected, which(H0)))
-    FDP <- false_discovery / max(nsel, 1)
-    
-    return(FDP)
-  })
-  
-  return(FDPs)
-}
-
 calc_sel_FDP <- function(selects, H0){
   FDPs <- sapply(1:NCOL(selects), function(tune_i){
     selected <- which(selects[, tune_i])
@@ -951,13 +656,6 @@ calc_FDP_power <- function(rejs, H0, sign_predict = NULL, sign_beta = NULL){
   return(c(FDP, power, FDP_dir, power_dir))
 }
 
-calc_sample_deviate <- function(hFDR.samples, FDP.samples){
-  # deviates <- abs(hFDR.samples - mean(hFDR.samples))
-  deviates <- abs(hFDR.samples - mean(FDP.samples))
-  # deviates <- abs(hFDR.samples - FDP.samples)
-  
-  return(deviates)
-}
 
 calc_deviate <- function(hFDR.samples, FDR.samples, measure = "std"){
   # deviates <- sapply(1:NROW(hFDR.samples), function(lambda_i){
@@ -991,16 +689,6 @@ calc_deviate <- function(hFDR.samples, FDR.samples, measure = "std"){
   return(list(low = low, up = up, type = type))
 }
 
-compress_dev <- function(dev){
-  digits <- 3
-  paste(round(dev$low, digits), round(dev$up, digits), dev$type)
-}
-
-extract_dev <- function(strs, index){
-  sapply(strs, function(str){
-    as.numeric(str_split(str, " ")[[1]][index])
-  })
-}
 
 
 
@@ -1040,100 +728,6 @@ lm_to_t <- function(y, X, Sigma = NULL){
 }
 
 
-
-
-
-# the complement of a union of disjoint intervals.
-# intervals$left: left bounds of the intervals in the increasing order;
-# intervals$right: right bounds of the intervals in the increasing order
-# univ_left, univ_right: the universal interval
-interval_complement <- function(intervals, univ_left = 0, univ_right = 1){
-  left <- c(univ_left, intervals$right)
-  right <- c(intervals$left, univ_right)
-  
-  left_unique <- NULL
-  right_unique <- NULL
-  for(ind in 1:length(left)){
-    if(left[ind] != right[ind]){
-      left_unique <- c(left_unique, left[ind])
-      right_unique <- c(right_unique, right[ind])
-    }
-  }
-  
-  complement <- list(left = left_unique, right = right_unique)
-  
-  return(complement)
-}
-
-# the intersection of two "union of disjoint intervals".
-# intervals$left: left bounds of the intervals in the increasing order;
-# intervals$right: right bounds of the intervals in the increasing order
-interval_intersect <- function(intervals1, intervals2){
-  left <- NULL
-  right <- NULL
-  intv1_num <- length(intervals1$left)
-  intv2_num <- length(intervals2$left)
-  if(min(intv1_num, intv2_num) > 0){
-    for(ind1 in 1:intv1_num){
-      for(ind2 in 1:intv2_num){
-        low <- max(intervals1$left[ind1], intervals2$left[ind2])
-        up <- min(intervals1$right[ind1], intervals2$right[ind2])
-        if(low < up){
-          left <- c(left, low)
-          right <- c(right, up)
-        }
-      }
-    }
-  }
-  intersect <- list(left = left, right = right)
-  
-  return(intersect)
-}
-
-# the union of two "union of disjoint intervals".
-# intervals$left: left bounds of the intervals in the increasing order;
-# intervals$right: right bounds of the intervals in the increasing order
-interval_union <- function(intervals1, intervals2){
-  complement1 <- interval_complement(intervals1, univ_left = -Inf, univ_right = Inf)
-  complement2 <- interval_complement(intervals2, univ_left = -Inf, univ_right = Inf)
-  
-  complements_intersect <- interval_intersect(complement1, complement2)
-  
-  union <- interval_complement(complements_intersect, univ_left = -Inf, univ_right = Inf)
-  
-  return(union)
-}
-
-# intervals1 \setminus intervals2
-# intervals$left: left bounds of the intervals in the increasing order;
-# intervals$right: right bounds of the intervals in the increasing order
-interval_minus <- function(intervals1, intervals2){
-  if(is.null(intervals1$left)){
-    return(list(left = NULL, right = NULL))
-  } else if(is.null(intervals2$left)){
-    return(list(left = intervals1$left, right = intervals1$right))
-  } else{
-    intv2_comp <- interval_complement(intervals2,
-                                      univ_left = min(c(intervals1$left, intervals2$left)),
-                                      univ_right = max(c(intervals1$right, intervals2$right)))
-    minus <- interval_intersect(intervals1, intv2_comp)
-    return(minus)
-  }
-}
-
-# check if x is in intervals
-x_in_intervals <- function(x, intervals){
-  if(is.null(intervals$left)){
-    return(FALSE)
-  }
-  int_num <- length(intervals$left)
-  for(i in 1:int_num){
-    if(x >= intervals$left[i] & x <= intervals$right[i]){
-      return(TRUE)
-    }
-  }
-  return(FALSE)
-}
 
 
 

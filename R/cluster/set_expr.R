@@ -38,7 +38,6 @@ for(iter_i in 1:length(fig_var$value)){
               target_at_alpha = target_at_alpha,
               target = targets[[iter_i]],
               calib_method = calib_methods[[iter_i]],
-              beta_permute = beta_permutes[[iter_i]],
               noise = noises[[iter_i]],
               method_names = method_names,
               FDR_range = FDR_range,

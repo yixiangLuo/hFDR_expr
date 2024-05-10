@@ -38,7 +38,6 @@ for(expr in expr_names){
                 target_at_alpha = target_at_alpha,
                 target = targets[[iter_i]],
                 calib_method = calib_methods[[iter_i]],
-                beta_permute = beta_permutes[[iter_i]],
                 noise = noises[[iter_i]],
                 method_names = method_names,
                 FDR_range = FDR_range,
@@ -109,13 +108,8 @@ for(expr in expr_names){
         }
       }
       
-      method_list <- get_method_list(X, y, set)
-      method_list <- method_list$methods
-      
       start.time <- Sys.time()
-      for(method_i in 1:length(method_list)){
-        method_hFDR <- method_list[[method_i]](X, y, tune_seq, Xcov.true)
-      }
+      calc_hFDR(X, y, tune_seq, set)
       end.time <- Sys.time()
       time.taken <- as.numeric(difftime(end.time, start.time, units = "secs"))
       

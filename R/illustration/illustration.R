@@ -4,11 +4,11 @@ library(here)
 library(tidyverse)
 library(glmnet)
 library(tictoc)
+library(hFDR)
 
-source(here("R", "lasso_hFDR.R"))
-source(here("R", "hFDR.R"))
 source(here("R", "utils.R"))
 source(here("R", "methods.R"))
+source(here("R", "plot.R"))
 
 
 ### scenario = "Independent X" ## "Independent X", "Correlated X", "Forward Stepwise"
@@ -103,21 +103,34 @@ for(scenario in c("Independent X", "Correlated X", "Forward Stepwise")) {
   p <- NCOL(X)
   
   
-  ### change selection method here, for Gaussian linear model, currently support "lasso", "elastic", "FS", "LARS", see hFDR.R
+  ### change selection method here, for Gaussian linear model, currently support "lasso", "elastic", "fs", "LARS", see hFDR.R
   if(scenario == "Forward Stepwise") {
-    method <- "FS"
+    method <- "fs"
     tune_seq <- 1:round(0.75*p)   # number of selections
   } else {
     method <- "lasso"
     tune_seq <- gene_lambda(X, y, scaler = 1.4)
   }
   
-  cv.obj <- cv.predict(X, y, method, tune_seq,
-                       nfold = 10, rescale = F, use_mle = F, fit_model = T)
+  select <- function(X, y, lambda){
+    select_variables(X, y, lambda, method = method)
+  }
+  pred_fit <- function(X.new, X, y, lambda){
+    model_predict(X.new, X, y, lambda, method = method, use_mle = F)
+  }
   
+  cv.obj <- cv.model(X, y, tune_seq, pred_fit, select, nfold = 10)
   
-  FDP <- calc_sel_FDP(cv.obj$selected, H0)
-  FPP <- 1-calc_sel_power(cv.obj$selected, H0)
+  lambda.hFDR <- subset_lambda(cv.obj, n_tune = ifelse(method == "fs", 60, 40))
+  tic()
+  hFDR.obj <- hFDR(X, y, model = "gausslinear", select = method, lambda = lambda.hFDR,
+                   psi = "pval", se = T, n_sample.se = 10, n_cores = 14)
+  toc()
+  
+  selected <- select_variables(X, y, tune_seq, method)
+  
+  FDP <- calc_sel_FDP(selected, H0)
+  FPP <- 1-calc_sel_power(selected, H0)
   error.samples <- sapply(1:100, function(mc_i){
     data.mc <- generate_data(scenario = scenario, way = "linear", setting_seed, noise_seed = -mc_i)
     X.mc <- data.mc$X
@@ -134,18 +147,6 @@ for(scenario in c("Independent X", "Correlated X", "Forward Stepwise")) {
   
   errors <- list(FDP = FDP, FPP = FPP, FDR = FDR, FPR = FPR)
   
-  tic()
-  hFDR.obj <- hFDR_on_cv(cv.obj, model = "fixed-X", n_tune = ifelse(method=="FS",60,40), n_cores = 16)
-  toc()
-  
-  tic()
-  hFDR.decomp <- hFDR_on_cv(cv.obj, model = "fixed-X", n_tune = ifelse(method=="FS",60,40), n_cores = 16, decompose = TRUE, skip_se = TRUE)
-  toc()
-  
-  #### These should match
-  colSums(hFDR.decomp$hFDR) - hFDR.obj$hFDR
-  
-  
   #### draw figures for paper
   fullcolumn.aspect.ratio <- 1.6
   fullcolumn.width <- 6
@@ -157,15 +158,24 @@ for(scenario in c("Independent X", "Correlated X", "Forward Stepwise")) {
   halfcolumn.legend <- FALSE
   halfcolumn.axes <- FALSE
   
-  pdf(file = here("figs","intro", paste0(gsub(" ","_",scenario), ".pdf")), width = fullcolumn.width, height = fullcolumn.width/fullcolumn.aspect.ratio)
+  xlab <- if(method %in% c("fs")) "number of steps" else expression(-log(lambda))
+  if(method != "fs"){
+    log_x <- T
+    hFDR.obj$lambda <- hFDR.obj$lambda * n
+    cv.obj$lambda <- cv.obj$lambda * n
+  } else{
+    log_x <- F
+  }
+  
+  pdf(file = here("figs", "intro", paste0(gsub(" ", "_", scenario), ".pdf")), width = fullcolumn.width, height = fullcolumn.width/fullcolumn.aspect.ratio)
   par(mar = fullcolumn.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-       show_cv = T, log_cv = F)  # leg_bty="n"
+  plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+       show_cv = T, log_cv = F, log_x = log_x)  # leg_bty="n"
   dev.off()
   
   
-  print(sum(cv.obj$selected[, cv.obj$ind.min]))
-  print(sum(cv.obj$selected[, cv.obj$ind.1se]))
+  print(cv.obj$nzero[cv.obj$index[1]])  # lambda.min
+  print(cv.obj$nzero[cv.obj$index[2]])  # lambda.1se
   
   
   # ### draw figures for slides. use show_cv, show_hFDR, show_FPR to control whether to show cv curve, hFDR, FDR/FDP if provided, and FPR/FPP. See hFDR.R > plot.hFDR
@@ -182,48 +192,48 @@ for(scenario in c("Independent X", "Correlated X", "Forward Stepwise")) {
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"fullslide_noFDR.pdf"), width = fullslide.width, height = fullslide.width/fullslide.aspect.ratio)
   # par(mar = fullslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = F, show_FPR = F, show_FDR = F, log_cv = F, leg_bty="n")
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = F, show_FPR = F, show_FDR = F, log_cv = F, log_x = log_x, leg_bty="n")
   # dev.off()
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"fullslide_FDR_nohFDR.pdf"), width = fullslide.width, height = fullslide.width/fullslide.aspect.ratio)
   # par(mar = fullslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = F, show_FPR = F, log_cv = F, leg_bty="n")
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = F, show_FPR = F, log_cv = F, log_x = log_x, leg_bty="n")
   # dev.off()
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"fullslide_hFDR.pdf"), width = fullslide.width, height = fullslide.width/fullslide.aspect.ratio)
   # par(mar = fullslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, leg_bty="n")
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, log_x = log_x, leg_bty="n")
   # dev.off()
   # 
   # # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"fullslide_hFDR_decomp.pdf"), width = fullslide.width, height = fullslide.width/fullslide.aspect.ratio)
   # # par(mar = fullslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  # #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, leg_bty="n")
+  # # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  # #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, log_x = log_x, leg_bty="n")
   # # dev.off()
   # 
   # 
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"halfslide_noFDR.pdf"), width = halfslide.width, height = halfslide.width/halfslide.aspect.ratio)
   # par(mar = halfslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = F, show_FPR = F, show_FDR = F, log_cv = F, 
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = F, show_FPR = F, show_FDR = F, log_cv = F, log_x = log_x, 
   #      show_legend=halfslide.legend, show_extra_axes = halfslide.axes, main = scenario)
   # dev.off()
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"halfslide_FDR_nohFDR.pdf"), width = halfslide.width, height = halfslide.width/halfslide.aspect.ratio)
   # par(mar = halfslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = F, show_FPR = F, log_cv = F, leg_bty="n", 
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = F, show_FPR = F, log_cv = F, log_x = log_x, leg_bty="n", 
   #      show_legend=halfslide.legend, show_extra_axes = halfslide.axes, main = scenario)
   # dev.off()
   # 
   # pdf(file = here("figs","talk","intro",gsub(" ","_",scenario),"halfslide_hFDR.pdf"), width = halfslide.width, height = halfslide.width/halfslide.aspect.ratio)
   # par(mar = halfslide.mar, cex = 1, cex.axis = 1, cex.lab = 1)
-  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("FS"))-1,
-  #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, leg_bty="n", 
+  # plot(hFDR.obj, cv.obj, errors, sign.tune = 2*(method %in% c("fs"))-1, xlab = xlab,
+  #      show_cv = T, show_hFDR = T, show_FPR = F, log_cv = F, log_x = log_x, leg_bty="n", 
   #      show_legend=halfslide.legend, show_extra_axes = halfslide.axes, main = scenario)
   # dev.off()
   

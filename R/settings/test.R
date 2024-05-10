@@ -1,11 +1,5 @@
 library(here)
-
-source(here("R", "homotopy_lasso.R"))
-source(here("R", "lasso_hFDR.R"))
-source(here("R", "hFDR.R"))
-
-library(glmnet)   # lasso
-# library(KernSmooth)  # local linear regression
+library(hFDR)
 
 source(here("R", "utils.R"))
 source(here("R", "methods.R"))
@@ -13,7 +7,7 @@ source(here("R", "methods.R"))
 
 experiment <- "test"
 sel_method <- "lasso" # lasso, FS, glasso
-model <- "fixed-X"
+model <- "gausslinear"
 
 p_seq <- 100
 n_seq <- 3*p_seq
@@ -35,8 +29,8 @@ y_mismodel <- F
 
 target_at_alpha <- 0.2
 # targets <- c(0.5)
-targets <- c(0.3)
-calib_methods <- c("BH")
+targets <- c(0.8)
+calib_methods <- c("lasso")
 
 beta_permutes <- NA
 noises <- c(quote(rnorm(n)))
@@ -46,7 +40,7 @@ noises <- c(quote(rnorm(n)))
 # fig_var <- list(name = "n / m = ", value = n_seq / p_seq)
 # fig_var <- list(name = "Signal strength: BH(0.05) has power", value = targets)
 # fig_var <- list(name = "sparsity: pi1 = ", value = pi1_seq)
-fig_var <- list(name = "setting", value = "Weak signal")
+fig_var <- list(name = "Design Matrix", value = X_types)
 
 makeup_vectors(p_seq = p_seq, n_seq = n_seq,
                X_types = X_types, posit_types = posit_types,
@@ -62,13 +56,12 @@ sample_size <- 100
 n_cores <- 14
 
 
-get_method_list <- get_multi_method_list
 method_names <- c("hFDR", "std") # "std"
 # "hFDR", "Poincare", "Bootstrap.ols", "Bootstrap.lasso_ols", "Bootstrap.lasso_ols.1se", "Bootstrap.nonpara", "Efron_Stein", "Efron_Stein.oracle", "Bootstrap.Bayes"
 
 fig_titles <- paste0("fig: ", fig_var$value)
 
-method_colors <- unname(multi_method_color[method_names])
+# method_colors <- unname(multi_method_color[method_names])
 # method_shapes <- unname(multi_method_shape[method_names])
 
 

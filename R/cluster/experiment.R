@@ -101,30 +101,25 @@ for(trial_index in job_trial_indeces){
     
   }
   
-  methods_hFDR <- list()
+  hFDR_res <- list()
   
   select.res <- select_variables(X, y, tune_seq, set$sel_method)
   
   oracle_FDP <- calc_sel_FDP(select.res, H0)
-  methods_hFDR[["FDP"]] <- oracle_FDP
+  hFDR_res[["FDP"]] <- oracle_FDP
   
   typeII_error <- 1 - calc_sel_power(select.res, H0)
-  methods_hFDR[["typeII_error"]] <- typeII_error
+  hFDR_res[["typeII_error"]] <- typeII_error
   
-  method_list <- get_method_list(X, y, set)
-  side_info <- c(list(beta = beta), set, method_list$side_info)
-  method_list <- method_list$methods
+  hFDR_res <- c(hFDR_res, calc_hFDR(X, y, tune_seq, set))
   
-  for(method_i in 1:length(method_list)){
-    method_hFDR <- method_list[[method_i]](X, y, tune_seq, Xcov.true)
-    methods_hFDR[[names(method_list[method_i])]] <- method_hFDR
-  }
-  
-  methods_hFDR <- as.data.frame(methods_hFDR) %>%
+  hFDR_res <- as.data.frame(hFDR_res) %>%
     mutate(tune_index = 1:length(tune_seq), sample_id = iter)
   
+  side_info <- c(list(beta = beta), set)
+  
   # save results
-  save(methods_hFDR, tune_seq, side_info,
+  save(hFDR_res, tune_seq, side_info,
        file = here("data", "temp", experiment, paste0(trial_index$trial_id, ".RData")))
   
   # delete the "in-progress" record

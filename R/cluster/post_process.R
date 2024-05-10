@@ -31,7 +31,7 @@ expr_results <- lapply(1:index_data$n_expr, function(expr_iter){
     set <- settings[[expr_iter]]
     
     hFDR_res <- lapply(results[[expr_iter]]$res, function(result){
-        result$methods_hFDR
+        result$hFDR_res
     })
     side_info <- lapply(results[[expr_iter]]$res, function(result){
         result$side_info

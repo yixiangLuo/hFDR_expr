@@ -4,105 +4,192 @@ library(lars)
 # library(rstanarm)
 
 
-get_multi_method_list <- function(X, y, settings){
+calc_hFDR <- function(X, y, tune_seq, settings){
     
     method_names <- settings$method_names
-    sel_method <- settings$sel_method
+    select <- settings$sel_method
     model <- settings$model
-    methods <- list()
     
-    n <- settings$n
-    p <- settings$p
-    
-    guess_null_by <- "p-value"
-    
-    if("hFDR" %in% method_names){
-        methods$hFDR <- function(X, y, tune_seq, Xcov.true = NA){
-            hFDR <- if(model == "fixed-X"){
-                hFDR.fixedX(X, y, tune_seq, guess_null_by, method = sel_method)
-            } else if(model == "model-X"){
-                hFDR.modelX(X, y, Xcov.true, tune_seq, guess_null_by, method = sel_method)
-            } else if(model == "graphGauss" && sel_method == "glasso"){
-                hFDR.glasso(X, tune_seq, guess_null_by)
-            } else stop()
-            
-            return(hFDR)
+    if(model == "modelX"){
+      X.mean <- rep(0, p)
+      X.cov <- Xcov.true
+      
+      modelX <- list(
+        sampler.modelX = function(X, ind, sample_size, storage = NULL){
+          sampler.modelX.gauss(X, ind, X.mean = X.mean, X.cov = X.cov, sample_size, storage)
+        },
+        pred_fit = function(X.new, X, y, lambda){
+          model_predict(X.new, X, y, lambda, method = settings$sel_method, use_mle = T)
         }
+      )
+      psi <- function(X, y, variables){
+        psi.modelX.gauss(X, y, variables, X.mean = X.mean, X.cov = X.cov, threshold = 0.1)
+      }
+    } else{
+      modelX <- NULL
+      psi <- "pval"
     }
     
+    if(!(select %in% c("lasso", "fs"))){
+      if(model == "gaussgraph"){
+        select <- function(X, lambda){
+          select_variables(X, NULL, lambda, method = settings$sel_method)
+        }
+      } else{
+        select <- function(X, y, lambda){
+          select_variables(X, y, lambda, method = settings$sel_method)
+        }
+      }
+    }
+    
+    hFDR.res <- hFDR(X, y, model = model, modelX = modelX, select = select,
+                     lambda = tune_seq, psi = psi, se = ("std" %in% method_names),
+                     n_sample.hfdr = 20, n_sample.se = 10, n_cores = 1)
+    
+    hFDR_res <- list()
+    hFDR_res$hFDR <- hFDR.res$hFDR
     if("std" %in% method_names){
-        methods$std <- function(X, y, tune_seq, Xcov.true = NA){
-            # std <- if(model == "fixed-X" && sel_method == "lasso"){
-            #     lasso.fit <- glmnet::glmnet(X, y, lambda = tune_seq,
-            #                                 intercept = F, standardize = F,
-            #                                 standardize.response = F, family = "gaussian")
-            #     glmnet.pack <- pack_glmnet(X, y, lasso.fit)
-            #     data.pack <- process_data(X, y)
-            #     
-            #     est_lasso_hFDR_std(glmnet.pack, data.pack,
-            #                        guess_null_by, measure = "std",
-            #                        couple = F)$deviate.est$up
-            # } else{
-            #     # std.hFDR.bs(X, y, function(X, y){
-            #     #     if(sel_method == "lasso"){
-            #     #         hFDR.modelX(X, y, Xcov.true, tune_seq, guess_null_by, method = "lasso")
-            #     #     } else if(sel_method == "FS"){
-            #     #         if(n > p){
-            #     #             hFDR.fixedX(X, y, tune_seq, guess_null_by, method = "FS")
-            #     #         } else{
-            #     #             hFDR.modelX(X, y, Xcov.true, tune_seq, guess_null_by, method = "FS")
-            #     #         }
-            #     #     } else if(sel_method == "glasso"){
-            #     #         hFDR.glasso(X, tune_seq, guess_null_by)
-            #     #     }
-            #     # }, mc_size = 20)
-            #     if(model == "fixed-X"){
-            #         std.hFDR.fixedX(X, y, tune_seq, guess_null_by,
-            #                         method = sel_method, mc_size = 20, n_cores = 1)
-            #     } else if(model == "model-X"){
-            #         std.hFDR.modelX(X, y, Xcov.true, tune_seq, guess_null_by,
-            #                         method = sel_method,
-            #                         mc_size = 20, n_cores = 1)
-            #     } else if(model == "graphGauss" && sel_method == "glasso"){
-            #         std.hFDR.GG(X, tune_seq, guess_null_by,
-            #                     method = sel_method,
-            #                     mc_size = 20, n_cores = 1)
-            #     } else stop()
-            # }
-            std <- if(model == "fixed-X"){
-                std.hFDR.fixedX(X, y, tune_seq, guess_null_by,
-                                method = sel_method, n_cores = 1)
-            } else if(model == "model-X"){
-                std.hFDR.modelX(X, y, Xcov.true, tune_seq, guess_null_by,
-                                method = sel_method,
-                                n_cores = 1)
-            } else if(model == "graphGauss" && sel_method == "glasso"){
-                std.hFDR.GG(X, tune_seq, guess_null_by,
-                            method = sel_method,
-                            n_cores = 1)
-            } else stop()
-            
-            return(compress_dev(list(low = -std, up = std, type = "add")))
-        }
+      hFDR_res$std <- hFDR.res$hFDR.se
     }
     
-    for(method_name in setdiff(method_names, c("hFDR", "std"))){
-        methods[[method_name]] <- function(X, y, tune_seq){
-            hFDR.std.est <- est_lasso_hFDR_std(glmnet.pack, data.pack, guess_null_by, method_name, couple = F)
-            hFDR.std.est <- compress_dev(hFDR.std.est)
-            return(hFDR.std.est)
-        }
-    }
-    
-    return(list(methods = methods, side_info = NA))
+    return(hFDR_res)
 }
 
-multi_method_color <- c("black", "#e41a1c", "#377eb8", "#377eb8", "#984ea3", "red", "#984ea3", "#006d2c", "orange1", "grey", "#006d2c")
-names(multi_method_color) <- c("FDP", "hFDR", "std", "Poincare", "Bootstrap.ols", "Bootstrap.lasso_ols", "Bootstrap.lasso_ols.1se", "Bootstrap.nonpara", "Efron_Stein", "Efron_Stein.oracle", "Bootstrap.Bayes")
 
-multi_method_shape <- c(1, 19, 15, 19, 19, 19, 19, 19, 19, 19, 19)
-names(multi_method_shape) <- c("FDP", "hFDR", "std", "Poincare", "Bootstrap.ols", "Bootstrap.lasso_ols", "Bootstrap.lasso_ols.1se", "Bootstrap.nonpara", "Efron_Stein", "Efron_Stein.oracle", "Bootstrap.Bayes")
+VALID_METHOD_NAMES <- c("lasso", "elastic", "fs", "LARS", "logistic", "ctree", "poisson", "glasso")
 
+select_variables <- function(X, y, tune_seq, method = VALID_METHOD_NAMES){
+  method <- match.arg(method)
+  n_tune <- length(tune_seq)
+  
+  if(method == "lasso"){
+    res <- glmnet::glmnet(X, y, lambda = tune_seq,
+                          intercept = T, standardize = T,
+                          family = "gaussian")
+    res <- as.matrix(res$beta != 0)
+  } else if(method == "elastic"){
+    res <- glmnet::glmnet(X, y, alpha = 0.5, lambda = tune_seq,
+                          intercept = T, standardize = T,
+                          family = "gaussian")
+    res <- as.matrix(res$beta != 0)
+  } else if(method == "fs"){
+    res <- forward_stepwise(X, y, tune_seq)
+  } else if(method == "LARS"){
+    res <- least_angle(X, y, tune_seq)$selected
+  } else if(method == "logistic"){
+    res <- glmnet::glmnet(X, y, lambda = tune_seq,
+                          intercept = T, standardize = T,
+                          family = "binomial")
+    res <- as.matrix(res$beta != 0)
+  } else if(method == "ctree"){
+    res <- rpart(y ~ X, method = "class", control = rpart.control(minsplit = 10, xval = 0))
+    importance <- rep(0, NCOL(X))
+    for(var_name in names(res$variable.importance)){
+      ind <- as.integer(gsub("X", "", var_name))
+      importance[ind] <- res$variable.importance[[var_name]]
+    }
+    res <- sapply(tune_seq, function(tune_val){
+      importance >= tune_val
+    })
+  } else if(method == "poisson"){
+    res <- glmnet::glmnet(X, y, lambda = tune_seq,
+                          intercept = T, standardize = T,
+                          family = "poisson")
+    res <- as.matrix(res$beta != 0)
+  } else if(method == "glasso"){
+    S <- var(X)
+    res <- sapply(tune_seq, function(rho){
+      inv.Sigma.est <- glasso(S, rho = rho)$wi
+      inv.Sigma.est[upper.tri(inv.Sigma.est)] != 0
+    })
+  } else{
+    stop()
+  }
+  res <- matrix(c(res), ncol = n_tune)
+  
+  return(res)
+}
+
+
+model_predict <- function(X_new, X, y, tune_seq, method = VALID_METHOD_NAMES, use_mle = T){
+  method <- match.arg(method)
+  tol <- 1e-6
+  
+  if(method %in% c("lasso", "elastic", "fs", "LARS")){
+    if(method == "lasso"){
+      res <- glmnet::glmnet(X, y, lambda = tune_seq,
+                            intercept = T, standardize = T,
+                            family = "gaussian")
+      selected <- (abs(res$beta) > tol)
+      # prediction <- predict(res, newx = X_new, s = tune_seq, type = "response")
+      # return(prediction)
+    } else if(method == "elastic"){
+      res <- glmnet::glmnet(X, y, alpha = 0.5, lambda = tune_seq,
+                            intercept = T, standardize = T,
+                            family = "gaussian")
+      selected <- (abs(res$beta) > tol)
+    } else if(method == "fs"){
+      selected <- forward_stepwise(X, y, tune_seq)
+    } else if(method == "LARS"){
+      res <- least_angle(X, y, tune_seq)
+      selected <- res$selected
+      res <- res$lar.obj
+    }
+    
+    prediction <- sapply(1:NCOL(selected), function(tune_i){
+      if(use_mle | method == "fs"){
+        coef <- rep(0, NROW(selected))
+        a0 <- 0
+        model <- selected[, tune_i]
+        if(sum(model) > 0){
+          lm.coefs <- lm(y ~ X[, model] + 1)$coefficients
+          coef[model] <- lm.coefs[-1]
+          a0 <- lm.coefs[1]
+        }
+        if(any(is.na(coef))){
+          coef[is.na(coef)] <- 0
+          warning("singular X in CV")
+        }
+        X_new %*% coef + a0
+      } else{
+        if(method != "LARS"){
+          X_new %*% res$beta[, tune_i] + res$a0[tune_i]
+        }
+        else{
+          n <- NROW(X)
+          predict(res, newx = X_new, s = tune_seq[tune_i] * sqrt(n), mode = "lambda")$fit
+        }
+      }
+    })
+  }
+  else if(method %in% c("logistic", "poisson")){
+    family <- if(method == "logistic") "binomial" else if(method == "poisson") "poisson" else stop()
+    res <- glmnet::glmnet(X, y, lambda = tune_seq,
+                          intercept = T, standardize = T,
+                          family = family)
+    selected <- (abs(res$beta) > tol)
+    if(use_mle){
+      prediction <- sapply(1:NCOL(selected), function(tune_i){
+        model <- selected[, tune_i]
+        if(sum(model) <= 1){
+          return(rep(Inf, NROW(X_new)))
+        }
+        mle <- glmnet::glmnet(X[, model], y, lambda = 0,
+                              intercept = T, standardize = T,
+                              family = family)
+        c(predict(mle, newx = X_new[, model], s = 0, type = "response"))
+      })
+    } else{
+      prediction <- predict(res, newx = X_new, s = tune_seq, type = "response")
+    }
+    
+  }
+  else{
+    stop()
+  }
+  
+  return(prediction)
+}
 
 
 forward_stepwise <- function(X, y, n_sels, use_leaps = T, force.out = NULL){
